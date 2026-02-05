@@ -22,4 +22,4 @@ Lightweight Windows 11 slideshow viewer (Python + PySide6) project skeleton.
 
 ## Notes
 - Edit `app/settings.py` to set the initial root folder.
-- Folder chaining and interval control are implemented in the UI.
+- Folder chaining, interval control, and async preloading are implemented in the UI.

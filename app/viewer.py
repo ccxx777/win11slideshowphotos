@@ -15,12 +15,14 @@ class SlideShowWindow(QtWidgets.QMainWindow):
         self._group_index = 0
         self._image_index = 0
         self._zoom = 1.0
+        self._last_pixmap: QtGui.QPixmap | None = None
 
         self._label = QtWidgets.QLabel("", alignment=QtCore.Qt.AlignCenter)
         self._label.setMinimumSize(640, 360)
         self.setCentralWidget(self._label)
 
         self._cache = ImageCache(preload_count)
+        self._cache.image_loaded.connect(self._on_image_loaded)
         self._timer = QtCore.QTimer(self)
         self._timer.timeout.connect(self.next_image)
 
@@ -86,14 +88,15 @@ class SlideShowWindow(QtWidgets.QMainWindow):
         self._show_current()
 
     def _show_current(self) -> None:
-        self._preload_next()
+        self._request_images()
         self._render()
 
-    def _preload_next(self) -> None:
+    def _request_images(self) -> None:
         if not self._groups:
             return
+        current = self._current_path()
         lookahead = self._collect_forward_paths(self._cache.max_items)
-        self._cache.preload(lookahead)
+        self._cache.request([current, *lookahead])
 
     def _collect_forward_paths(self, count: int) -> list[Path]:
         paths: list[Path] = []
@@ -114,6 +117,12 @@ class SlideShowWindow(QtWidgets.QMainWindow):
     def _current_path(self) -> Path:
         return self._groups[self._group_index][self._image_index]
 
+    def _on_image_loaded(self, path: Path) -> None:
+        if not self._groups:
+            return
+        if path == self._current_path():
+            self._render()
+
     def _on_interval_changed(self, value: float) -> None:
         self._apply_interval(value)
 
@@ -125,10 +134,13 @@ class SlideShowWindow(QtWidgets.QMainWindow):
         if not self._groups:
             return
         path = self._current_path()
-        pixmap = QtGui.QPixmap(str(path))
-        if pixmap.isNull():
-            self._label.setText(f"Failed to load: {path}")
+        image = self._cache.get(path)
+        if image is None:
+            if self._last_pixmap is None:
+                self._label.setText(f"Loading: {path.name}")
             return
+
+        pixmap = QtGui.QPixmap.fromImage(image)
 
         target_size = self._label.size()
         if self._zoom != 1.0:
@@ -136,3 +148,4 @@ class SlideShowWindow(QtWidgets.QMainWindow):
 
         scaled = pixmap.scaled(target_size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
         self._label.setPixmap(scaled)
+        self._last_pixmap = pixmap
