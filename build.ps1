@@ -5,4 +5,4 @@ $env:PYTHONIOENCODING = 'utf-8'
 
 pyinstaller --noconfirm --clean --onefile --windowed `
   --name "Win11SlideshowPhotos" `
-  -m app
+  .\app\__main__.py
