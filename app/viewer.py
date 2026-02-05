@@ -23,7 +23,21 @@ class SlideShowWindow(QtWidgets.QMainWindow):
         self._cache = ImageCache(preload_count)
         self._timer = QtCore.QTimer(self)
         self._timer.timeout.connect(self.next_image)
-        self._timer.start(int(max(0.05, interval_seconds) * 1000))
+
+        self._interval_spin = QtWidgets.QDoubleSpinBox()
+        self._interval_spin.setRange(0.05, 60.0)
+        self._interval_spin.setDecimals(2)
+        self._interval_spin.setSingleStep(0.05)
+        self._interval_spin.setValue(max(0.05, float(interval_seconds)))
+        self._interval_spin.valueChanged.connect(self._on_interval_changed)
+
+        toolbar = QtWidgets.QToolBar("Controls")
+        toolbar.setMovable(False)
+        toolbar.addWidget(QtWidgets.QLabel("Interval (s): "))
+        toolbar.addWidget(self._interval_spin)
+        self.addToolBar(toolbar)
+
+        self._apply_interval(self._interval_spin.value())
 
         if not self._groups:
             self._label.setText("No images found. Update app/settings.py")
@@ -99,6 +113,13 @@ class SlideShowWindow(QtWidgets.QMainWindow):
 
     def _current_path(self) -> Path:
         return self._groups[self._group_index][self._image_index]
+
+    def _on_interval_changed(self, value: float) -> None:
+        self._apply_interval(value)
+
+    def _apply_interval(self, value: float) -> None:
+        interval_ms = int(max(0.05, float(value)) * 1000)
+        self._timer.start(interval_ms)
 
     def _render(self) -> None:
         if not self._groups:
