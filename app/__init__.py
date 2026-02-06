@@ -1,1 +1,0 @@
-﻿"""win11slideshowphotos package."""

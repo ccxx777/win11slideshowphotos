@@ -1,0 +1,31 @@
+﻿<Window x:Class="Win11SlideshowPhotos.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:Win11SlideshowPhotos"
+        mc:Ignorable="d"
+        Title="Win11 Slideshow Photos" Height="720" Width="1280"
+        Background="#111111">
+    <DockPanel LastChildFill="True">
+        <Border DockPanel.Dock="Top" Background="#1f1f1f" Padding="8">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Button x:Name="OpenFolderButton" Content="Open Folder" Padding="10,4" Margin="0,0,8,0"/>
+                <TextBlock Text="Interval (s)" Foreground="#e6e6e6" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <Button x:Name="IntervalDownButton" Content="-" Width="28" Height="24" Margin="0,0,4,0"/>
+                <TextBox x:Name="IntervalBox" Width="64" Height="24" Text="2.00" Margin="0,0,4,0"
+                         VerticalContentAlignment="Center" HorizontalContentAlignment="Center"/>
+                <Button x:Name="IntervalUpButton" Content="+" Width="28" Height="24" Margin="0,0,12,0"/>
+                <TextBlock x:Name="StatusText" Foreground="#9aa0a6" VerticalAlignment="Center"/>
+            </StackPanel>
+        </Border>
+
+        <Grid>
+            <Border Background="#111111">
+                <Image x:Name="ImageView"
+                       Stretch="Uniform"
+                       RenderTransformOrigin="0.5,0.5" />
+            </Border>
+        </Grid>
+    </DockPanel>
+</Window>
