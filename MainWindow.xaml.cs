@@ -3,28 +3,31 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Forms;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using WinForms = System.Windows.Forms;
 
 namespace Win11SlideshowPhotos;
 
 public partial class MainWindow : Window
 {
-    private readonly Settings _settings = new();
+    private readonly Settings _settings;
     private readonly ImageCache _cache;
     private SlideShowQueue _queue = new(new List<List<string>>());
     private readonly DispatcherTimer _timer;
     private double _zoom = 1.0;
+    private bool _isPaused;
 
-    public MainWindow()
+    public MainWindow(string? argPath)
     {
         InitializeComponent();
 
+        _settings = Settings.Load();
         _cache = new ImageCache(_settings.PreloadCount);
         _cache.ImageLoaded += OnImageLoaded;
 
@@ -32,7 +35,7 @@ public partial class MainWindow : Window
         _timer.Tick += (_, _) => NextImage();
 
         IntervalBox.Text = _settings.IntervalSeconds.ToString("0.00", CultureInfo.InvariantCulture);
-        ApplyInterval(_settings.IntervalSeconds);
+        ApplyInterval(_settings.IntervalSeconds, autoStart: true);
 
         OpenFolderButton.Click += (_, _) => PickFolder();
         IntervalUpButton.Click += (_, _) => StepInterval(0.05);
@@ -42,31 +45,68 @@ public partial class MainWindow : Window
 
         PreviewMouseWheel += OnPreviewMouseWheel;
         KeyDown += OnKeyDown;
+        Closing += (_, _) => _settings.Save();
 
         ImageView.RenderTransform = new ScaleTransform(1.0, 1.0);
 
-        LoadQueue(_settings.RootFolder);
+        var resolved = ResolveStartPath(argPath);
+        if (resolved != null)
+        {
+            if (File.Exists(resolved))
+            {
+                _settings.RootFolder = Path.GetDirectoryName(resolved) ?? _settings.RootFolder;
+                LoadQueue(_settings.RootFolder, resolved);
+            }
+            else if (Directory.Exists(resolved))
+            {
+                _settings.RootFolder = resolved;
+                LoadQueue(_settings.RootFolder, null);
+            }
+        }
+        else
+        {
+            LoadQueue(_settings.RootFolder, null);
+        }
+
         ShowCurrent();
+    }
+
+    private static string? ResolveStartPath(string? argPath)
+    {
+        if (string.IsNullOrWhiteSpace(argPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            return Path.GetFullPath(argPath.Trim('"'));
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private void PickFolder()
     {
-        using var dialog = new FolderBrowserDialog();
+        using var dialog = new WinForms.FolderBrowserDialog();
         dialog.Description = "Choose a folder to play";
         dialog.UseDescriptionForTitle = true;
         dialog.SelectedPath = _settings.RootFolder;
 
-        if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+        if (dialog.ShowDialog() == WinForms.DialogResult.OK)
         {
             _settings.RootFolder = dialog.SelectedPath;
-            LoadQueue(_settings.RootFolder);
+            _settings.Save();
+            LoadQueue(_settings.RootFolder, null);
             ShowCurrent();
         }
     }
 
-    private void LoadQueue(string root)
+    private void LoadQueue(string root, string? startPath)
     {
-        _queue = SlideShowQueue.Build(root);
+        _queue = SlideShowQueue.Build(root, startPath);
         _cache.Clear();
 
         if (_queue.IsEmpty)
@@ -78,6 +118,12 @@ public partial class MainWindow : Window
 
     private void OnKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
+        if (e.Key == Key.Space)
+        {
+            TogglePause();
+            return;
+        }
+
         if (e.Key == Key.Right)
         {
             NextImage();
@@ -86,6 +132,20 @@ public partial class MainWindow : Window
         {
             PrevImage();
         }
+    }
+
+    private void TogglePause()
+    {
+        _isPaused = !_isPaused;
+        if (_isPaused)
+        {
+            _timer.Stop();
+        }
+        else
+        {
+            _timer.Start();
+        }
+        UpdateStatus();
     }
 
     private void OnPreviewMouseWheel(object sender, MouseWheelEventArgs e)
@@ -120,22 +180,26 @@ public partial class MainWindow : Window
     private void StepInterval(double delta)
     {
         var value = ParseInterval(IntervalBox.Text, _settings.IntervalSeconds) + delta;
-        ApplyInterval(value);
+        ApplyInterval(value, autoStart: !_isPaused);
     }
 
     private void ApplyIntervalFromText()
     {
         var value = ParseInterval(IntervalBox.Text, _settings.IntervalSeconds);
-        ApplyInterval(value);
+        ApplyInterval(value, autoStart: !_isPaused);
     }
 
-    private void ApplyInterval(double seconds)
+    private void ApplyInterval(double seconds, bool autoStart)
     {
         var clamped = Math.Clamp(seconds, 0.05, 60.0);
         _settings.IntervalSeconds = clamped;
+        _settings.Save();
         IntervalBox.Text = clamped.ToString("0.00", CultureInfo.InvariantCulture);
         _timer.Interval = TimeSpan.FromSeconds(clamped);
-        _timer.Start();
+        if (autoStart)
+        {
+            _timer.Start();
+        }
     }
 
     private static double ParseInterval(string text, double fallback)
@@ -155,7 +219,14 @@ public partial class MainWindow : Window
             return;
         }
 
-        _queue.Next();
+        if (!_queue.TryNext())
+        {
+            _isPaused = true;
+            _timer.Stop();
+            UpdateStatus("End of folders");
+            return;
+        }
+
         ShowCurrent();
     }
 
@@ -166,8 +237,10 @@ public partial class MainWindow : Window
             return;
         }
 
-        _queue.Prev();
-        ShowCurrent();
+        if (_queue.TryPrev())
+        {
+            ShowCurrent();
+        }
     }
 
     private void ShowCurrent()
@@ -200,7 +273,23 @@ public partial class MainWindow : Window
 
         ImageView.Source = bitmap;
         ApplyZoom();
-        StatusText.Text = $"{Path.GetFileName(current)}  ({_queue.PositionText})";
+        UpdateStatus();
+    }
+
+    private void UpdateStatus(string? overrideText = null)
+    {
+        if (!string.IsNullOrWhiteSpace(overrideText))
+        {
+            StatusText.Text = overrideText;
+            return;
+        }
+
+        var status = $"{Path.GetFileName(_queue.Current)}  ({_queue.PositionText})";
+        if (_isPaused)
+        {
+            status += "  [Paused]";
+        }
+        StatusText.Text = status;
     }
 
     private void ApplyZoom()
@@ -231,12 +320,63 @@ public partial class MainWindow : Window
 
 internal sealed class Settings
 {
+    private static readonly string SettingsPath =
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Win11SlideshowPhotos", "settings.json");
+
     public string RootFolder { get; set; } =
         Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
 
     public double IntervalSeconds { get; set; } = 2.0;
 
     public int PreloadCount { get; set; } = 6;
+
+    public static Settings Load()
+    {
+        try
+        {
+            if (File.Exists(SettingsPath))
+            {
+                var json = File.ReadAllText(SettingsPath);
+                var settings = JsonSerializer.Deserialize<Settings>(json);
+                if (settings != null)
+                {
+                    if (string.IsNullOrWhiteSpace(settings.RootFolder))
+                    {
+                        settings.RootFolder = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
+                    }
+                    if (settings.IntervalSeconds <= 0)
+                    {
+                        settings.IntervalSeconds = 2.0;
+                    }
+                    return settings;
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return new Settings();
+    }
+
+    public void Save()
+    {
+        try
+        {
+            var folder = Path.GetDirectoryName(SettingsPath);
+            if (!string.IsNullOrWhiteSpace(folder))
+            {
+                Directory.CreateDirectory(folder);
+            }
+
+            var json = JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(SettingsPath, json);
+        }
+        catch
+        {
+        }
+    }
 }
 
 internal sealed class SlideShowQueue
@@ -257,7 +397,7 @@ internal sealed class SlideShowQueue
         _imageIndex = 0;
     }
 
-    public static SlideShowQueue Build(string root)
+    public static SlideShowQueue Build(string root, string? startPath)
     {
         if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
         {
@@ -289,7 +429,12 @@ internal sealed class SlideShowQueue
             }
         }
 
-        return new SlideShowQueue(groups);
+        var queue = new SlideShowQueue(groups);
+        if (!string.IsNullOrWhiteSpace(startPath))
+        {
+            queue.SetCurrentByPath(startPath);
+        }
+        return queue;
     }
 
     public bool IsEmpty => _groups.Count == 0;
@@ -298,38 +443,50 @@ internal sealed class SlideShowQueue
 
     public string PositionText => $"{_groupIndex + 1}/{_groups.Count} : {_imageIndex + 1}/{_groups[_groupIndex].Count}";
 
-    public void Next()
+    public bool TryNext()
     {
         if (IsEmpty)
         {
-            return;
+            return false;
         }
 
         if (_imageIndex + 1 < _groups[_groupIndex].Count)
         {
             _imageIndex++;
-            return;
+            return true;
         }
 
-        _groupIndex = (_groupIndex + 1) % _groups.Count;
-        _imageIndex = 0;
+        if (_groupIndex + 1 < _groups.Count)
+        {
+            _groupIndex++;
+            _imageIndex = 0;
+            return true;
+        }
+
+        return false;
     }
 
-    public void Prev()
+    public bool TryPrev()
     {
         if (IsEmpty)
         {
-            return;
+            return false;
         }
 
         if (_imageIndex > 0)
         {
             _imageIndex--;
-            return;
+            return true;
         }
 
-        _groupIndex = (_groupIndex - 1 + _groups.Count) % _groups.Count;
-        _imageIndex = _groups[_groupIndex].Count - 1;
+        if (_groupIndex > 0)
+        {
+            _groupIndex--;
+            _imageIndex = _groups[_groupIndex].Count - 1;
+            return true;
+        }
+
+        return false;
     }
 
     public IEnumerable<string> ForwardPaths(int count)
@@ -348,13 +505,32 @@ internal sealed class SlideShowQueue
             {
                 imageIndex++;
             }
+            else if (groupIndex + 1 < _groups.Count)
+            {
+                groupIndex++;
+                imageIndex = 0;
+            }
             else
             {
-                groupIndex = (groupIndex + 1) % _groups.Count;
-                imageIndex = 0;
+                yield break;
             }
 
             yield return _groups[groupIndex][imageIndex];
+        }
+    }
+
+    private void SetCurrentByPath(string path)
+    {
+        for (var gi = 0; gi < _groups.Count; gi++)
+        {
+            var group = _groups[gi];
+            var index = group.FindIndex(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+            if (index >= 0)
+            {
+                _groupIndex = gi;
+                _imageIndex = index;
+                return;
+            }
         }
     }
 

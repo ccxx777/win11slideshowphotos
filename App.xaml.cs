@@ -1,5 +1,4 @@
-﻿using System.Configuration;
-using System.Data;
+﻿using System.Linq;
 
 namespace Win11SlideshowPhotos;
 
@@ -8,5 +7,11 @@ namespace Win11SlideshowPhotos;
 /// </summary>
 public partial class App : System.Windows.Application
 {
+    protected override void OnStartup(System.Windows.StartupEventArgs e)
+    {
+        base.OnStartup(e);
+        var arg = e.Args.FirstOrDefault();
+        var window = new MainWindow(arg);
+        window.Show();
+    }
 }
-
